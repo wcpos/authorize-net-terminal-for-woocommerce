@@ -14,22 +14,23 @@ require_once __DIR__ . '/Recording_Authorize_Net_Provider.php';
 
 /**
  * Capabilities claimed beyond the floor, and why:
- * - `cancel`, `cancel_final`: before a transaction is claimed, cancel ends the leg at once (`final`);
- *   nothing was sent to Authorize.net, so there is nothing to wait for.
+ * - `cancel`, `cancel_requested_then_completed`: before a claim, cancel is a request (`requested`). A tap
+ *   may already be on its way, so the next fetch decides: one fresh tap completes the leg (completion
+ *   wins), anything else cancels it. Once claimed, cancel is refused (refund instead).
  * - `prompt`: when several transactions fit, the till waits on a pick-list and answer() claims one.
  * - `refund`, `partial_refund`: a void before settlement, refundTransaction after it.
  * - `test_live_isolation`: an action keeps the environment it was created in; after a switch it fails
  *   (`mode_changed`) without a request to either environment.
  * Not claimed: `webhook`, `webhook_money_only`, `legacy_adoption`, `historical_webview_refund` (no
- * webhooks); `manual_capture`; `cancel_requested_then_completed`, `cancel_unsupported` (cancel is
- * always final or refused once claimed); `expiry` (Authorize.net never ends a leg: the app holds no
- * pending sale, so Free's deadline ends it with a cancel); `refund_synchronous` (a refund held for
- * review, responseCode 4, is `pending`); `non_idempotent_create` (create sends nothing and is keyed on
- * the row id, so a replay returns the same action).
+ * webhooks); `manual_capture`; `cancel_final` (no cancel ends a leg at once, for the reason above);
+ * `cancel_unsupported`; `expiry` (Authorize.net never ends a leg: the app holds no pending sale, so
+ * Free's deadline ends it with a cancel); `refund_synchronous` (a refund held for review, responseCode 4,
+ * is `pending`); `non_idempotent_create` (create sends nothing and is keyed on the row id, so a replay
+ * returns the same action).
  */
 final class Authorize_Net_Conformance_Fixture implements Conformance_Fixture
 {
-    private const CAPABILITIES = array('cancel', 'cancel_final', 'prompt', 'refund', 'partial_refund', 'test_live_isolation');
+    private const CAPABILITIES = array('cancel', 'cancel_requested_then_completed', 'prompt', 'refund', 'partial_refund', 'test_live_isolation');
 
     /** @var Fake_Authorize_Net_Transport */
     public $transport;
@@ -113,15 +114,16 @@ final class Authorize_Net_Conformance_Fixture implements Conformance_Fixture
     public function script(string $scenario): void
     {
         // Scenario => app taps newly listed at each fetch ("amount" or "amount:status"), the refund's
-        // responseCode, the merchant account's currencies. The order total is 92.95.
+        // responseCode, the merchant account's currencies, and details fields that differ from the list.
+        // The order total is 92.95.
         $scripts = array(
             'create_ok' => array(array()),
             'create_indeterminate' => array(array()),
             'pending_then_completed' => array(array(), array('92.95')),
             'declined' => array(array('92.95:declined')),
             'cancel_requested_then_cancelled' => array(array()),
-            'cancel_final' => array(array()),
-            'amount_mismatch' => array(array('90.00')),
+            'cancel_requested_then_completed' => array(array('92.95')), // Listed at the first fetch, after the cancel.
+            'amount_mismatch' => array(array('92.95')), // Listed as 92.95; the details settle 90.00 (below).
             'currency_mismatch' => array(array('92.95')), // The merchant account settles only EUR (below).
             'expired' => array(array()),
             'prompt' => array(array('92.95', '92.95')),
@@ -134,7 +136,8 @@ final class Authorize_Net_Conformance_Fixture implements Conformance_Fixture
             throw new \OutOfBoundsException('Unknown conformance scenario: ' . $scenario);
         }
         $codes = array('refund_pending' => '4', 'refund_failed' => '2');
-        $this->transport->script($scripts[$scenario], $codes[$scenario] ?? '1', $scenario === 'currency_mismatch' ? array('EUR') : array('USD'));
+        $details = array('amount_mismatch' => array('settleAmount' => 90.00));
+        $this->transport->script($scripts[$scenario], $codes[$scenario] ?? '1', $scenario === 'currency_mismatch' ? array('EUR') : array('USD'), $details[$scenario] ?? array());
         $this->lose_creates = $scenario === 'create_indeterminate' ? 1 : 0;
         $this->flip_to_production = $scenario === 'test_live_isolation';
     }

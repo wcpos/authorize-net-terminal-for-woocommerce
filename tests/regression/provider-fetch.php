@@ -91,10 +91,10 @@ Antwc_Fake_Http::$unsettled[] = array_merge(antwc_test_details('4001', 12.34, $n
 antwc_assert_same(array(), $provider->fetch($ref)['prompt']['buttons'], 'provider-fetch: a voided transaction is not offered');
 
 $ref = antwc_fetch_setup();
-antwc_test_tap('4001', 12.34, $now + 5, array('settleAmount' => 99.0));
+antwc_test_tap('4001', 12.34, $now + 5, array('transactionType' => 'refundTransaction'));
 $result = $provider->fetch($ref);
 antwc_assert_same(array('in_progress', array('txn:4001')), array($result['status'], array_column($result['prompt']['buttons'], 'id')), 'provider-fetch: auto-match refusal falls through to the prompt');
-antwc_assert_same('That Authorize.net payment is not for USD 12.34.', $result['prompt']['lines'][0], 'provider-fetch: refusal line shown');
+antwc_assert_same('That Authorize.net transaction is not a completed sale.', $result['prompt']['lines'][0], 'provider-fetch: refusal line shown');
 antwc_assert_same(array(), $GLOBALS['wpdb']->rows, 'provider-fetch: refused auto-match claims nothing');
 
 $ref = antwc_fetch_setup();

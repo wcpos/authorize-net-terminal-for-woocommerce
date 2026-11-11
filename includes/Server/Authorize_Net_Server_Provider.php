@@ -17,6 +17,9 @@ use WCPOS\WooCommercePOSPro\Payments\Server\Money_Units;
  * finds that transaction in the unsettled list (Transaction Details API). A transaction completes a leg
  * only after it passes TransactionVerifier on its full details and Claim_Store claims it for this row,
  * in the same call, or when the claim is already stored. Every doubt stays in_progress or indeterminate.
+ * Two outcomes end a leg without money: a same-amount decline while nothing captured fits (failed), and
+ * a requested cancel that the next fetch finds no single fresh tap for (cancelled). A tap whose amount or
+ * currency is wrong is reported as Authorize.net has it, unclaimed, so Free fails the row.
  */
 class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
 {
@@ -103,8 +106,11 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
 
         try {
             $client = $this->client();
-            $candidates = $this->candidates($client, $action);
+            $list = $this->unsettled($client);
+            $candidates = $this->candidates($list, $action);
             $refusal = null;
+            // A cancel-requested leg has no till left to answer a prompt, so it auto-matches whatever the setting.
+            $requested = $action['cancel_requested_at'] !== null;
 
             // Crash recovery: this row claimed a transaction but did not store it.
             foreach ($candidates as $candidate) {
@@ -116,18 +122,35 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
                     $refusal = $result;
                 }
             }
+            $ours_refused = $refusal !== null;
 
-            if ($refusal === null && Settings::auto_match()) {
+            if ($refusal === null && ($requested || Settings::auto_match())) {
                 $fresh = array_values(array_filter($candidates, static function (array $candidate) use ($action) {
                     return $candidate['submitted'] >= (int) $action['created_at'] - self::AUTO_MATCH_SKEW_SECONDS;
                 }));
                 if (count($fresh) === 1) {
                     $result = $this->verify_and_claim($client, $action, $fresh[0]['trans_id']);
                     if (isset($result['status'])) {
-                        return $result;
+                        return $result; // Completion wins over the cancel.
                     }
                     $refusal = $result;
                 }
+            }
+
+            // A doubt about a listed tap is not a no: leave the cancel undecided so a later fetch decides again.
+            if ($requested && $ours_refused) {
+                return $this->indeterminate('antwc_claim_unverified', __('This payment was recorded by this sale but could not be verified with Authorize.net. Try again.', 'authorize-net-terminal-for-woocommerce'));
+            }
+            if ($requested && $refusal !== null && in_array($refusal['reason'], array('not_found', 'in_future'), true)) {
+                return $this->indeterminate('antwc_cancel_undecided', __('Authorize.net lists a payment for this sale that could not be checked yet. Try again.', 'authorize-net-terminal-for-woocommerce'));
+            }
+            if ($requested) {
+                $this->actions->mark_cancelled((string) $action['row_id']);
+
+                return self::cancelled_observation();
+            }
+            if (count($candidates) === 0 && self::declined_since($list, $action)) {
+                return array('status' => 'failed', 'amount' => null, 'currency' => null, 'failure_reason' => 'declined');
             }
 
             return self::prompt_observation($action, $candidates, $refusal);
@@ -143,6 +166,9 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
         $action = $this->action_for($ref);
         if ($action === null) {
             return self::unknown_action();
+        }
+        if ($action['cancel_requested_at'] !== null) {
+            return new \WP_Error('antwc_cancel_requested', __('This payment is being cancelled.', 'authorize-net-terminal-for-woocommerce'), array('status' => 409));
         }
         if (preg_match('/^txn:(\d{1,20})$/', $button_id, $match) !== 1) {
             return new \WP_Error('antwc_bad_button', __('That choice is not an Authorize.net payment.', 'authorize-net-terminal-for-woocommerce'), array('status' => 400));
@@ -160,7 +186,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
             }
 
             // A refusal never ends the leg: the cashier can pick another or cancel.
-            return self::prompt_observation($action, $this->candidates($client, $action), $result);
+            return self::prompt_observation($action, $this->candidates($this->unsettled($client), $action), $result);
         } catch (AuthorizeNetException $e) {
             return $this->api_unavailable($e);
         } catch (\RuntimeException $e) {
@@ -177,9 +203,12 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
         if ($action['claim'] !== null) {
             return new \WP_Error('antwc_cancel_claimed', __('Money was taken; refund it instead.', 'authorize-net-terminal-for-woocommerce'), array('status' => 409));
         }
-        $this->actions->mark_cancelled((string) $action['row_id']);
+        // A tap may already be on its way to the list; the next fetch decides, and completion wins.
+        if (!$action['cancelled'] && $action['cancel_requested_at'] === null) {
+            $this->actions->request_cancel((string) $action['row_id'], $this->now());
+        }
 
-        return 'final';
+        return 'requested';
     }
 
     public function refund(array $row, int $refund_id, string $amount)
@@ -290,16 +319,29 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
         if (count($details) > 0 && (string) ($details['transId'] ?? '') !== $trans_id) {
             $details = array(); // An answer for some other transaction is no answer.
         }
+        $currencies = count($details) > 0 ? $client->merchant_currencies() : array();
         $verdict = $this->verifier->verify(
             $details,
             (string) $action['amount'],
             (string) $action['currency'],
-            count($details) > 0 ? $client->merchant_currencies() : array(),
+            $currencies,
             (int) $action['created_at'] - self::LOOKBACK_SECONDS,
             $this->now()
         );
         if (empty($verdict['ok'])) {
-            return $verdict;
+            $observed = in_array($verdict['reason'], array('amount_mismatch', 'currency_mismatch'), true) ? self::observed_money($action, $details, $currencies) : null;
+            if ($observed === null) {
+                return $verdict;
+            }
+            // Wrong money is reported as Authorize.net has it, never claimed: Free fails the row with a note.
+            Logger::log('Authorize.net transaction does not match the payment', array('row_id' => (string) $action['row_id'], 'order_id' => (int) $action['order_id'], 'trans_id' => $trans_id, 'reason' => $verdict['reason']), null, 'warning');
+
+            return array(
+                'status' => 'completed',
+                'amount' => $observed[0],
+                'currency' => $observed[1],
+                'provider_refs' => array('transaction_id' => $trans_id, 'mode' => (string) $action['mode']),
+            );
         }
 
         $row_id = (string) $action['row_id'];
@@ -336,17 +378,18 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
      * Candidate transactions for a leg, newest first: captured, same amount, recent enough, not another
      * row's. "ours" marks one this row has already claimed.
      *
+     * @param array<int, array<string, mixed>> $list The unsettled list.
      * @param array<string, mixed> $action
      * @return array<int, array<string, mixed>>
      */
-    private function candidates(AuthorizeNetClient $client, array $action): array
+    private function candidates(array $list, array $action): array
     {
         $currency = (string) $action['currency'];
         $row_minor = Money_Units::minor((string) $action['amount'], $currency);
         $floor = (int) $action['created_at'] - self::LOOKBACK_SECONDS;
         $candidates = array();
 
-        foreach ($this->unsettled($client) as $item) {
+        foreach ($list as $item) {
             $trans_id = isset($item['transId']) && is_scalar($item['transId']) ? (string) $item['transId'] : '';
             if (($item['transactionStatus'] ?? '') !== 'capturedPendingSettlement' || preg_match('/^\d{1,20}$/', $trans_id) !== 1) {
                 continue;
@@ -382,6 +425,48 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
         });
 
         return array_slice($candidates, 0, self::MAX_CANDIDATES);
+    }
+
+    /**
+     * True when a decline of exactly the leg's amount was submitted since the leg started (less skew).
+     * Any register's decline counts: failing a live leg only makes the cashier start again.
+     *
+     * @param array<int, array<string, mixed>> $list
+     * @param array<string, mixed> $action
+     */
+    private static function declined_since(array $list, array $action): bool
+    {
+        $currency = (string) $action['currency'];
+        foreach ($list as $item) {
+            $submitted = TransactionVerifier::parse_utc(isset($item['submitTimeUTC']) && is_string($item['submitTimeUTC']) ? $item['submitTimeUTC'] : '');
+            if (($item['transactionStatus'] ?? '') === 'declined'
+                && TransactionVerifier::settle_minor($item['settleAmount'] ?? null, $currency) === Money_Units::minor((string) $action['amount'], $currency)
+                && $submitted !== null && $submitted >= (int) $action['created_at'] - self::AUTO_MATCH_SKEW_SECONDS) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The money a mismatched transaction carries: its settleAmount in the order currency's units, and
+     * the merchant's currency (the order's when listed, else the first listed). Null when unreadable.
+     *
+     * @param array<string, mixed> $action
+     * @param array<string, mixed> $details
+     * @param string[] $currencies
+     * @return array{0: string, 1: string}|null
+     */
+    private static function observed_money(array $action, array $details, array $currencies): ?array
+    {
+        $currency = (string) $action['currency'];
+        $minor = TransactionVerifier::settle_minor($details['settleAmount'] ?? null, $currency);
+        if ($minor === null || count($currencies) === 0) {
+            return null;
+        }
+
+        return array(Money_Units::major($minor, $currency), in_array($currency, $currencies, true) ? $currency : (string) $currencies[0]);
     }
 
     /**
@@ -451,7 +536,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
     private function settled_state(array $action): ?array
     {
         if ($action['cancelled']) {
-            return array('status' => 'cancelled', 'amount' => null, 'currency' => null, 'failure_reason' => 'cancelled');
+            return self::cancelled_observation();
         }
         if ($action['mode'] !== Settings::environment()) {
             return array('status' => 'failed', 'amount' => null, 'currency' => null, 'failure_reason' => 'mode_changed');
@@ -461,6 +546,14 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
         }
 
         return null;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function cancelled_observation(): array
+    {
+        return array('status' => 'cancelled', 'amount' => null, 'currency' => null, 'failure_reason' => 'cancelled');
     }
 
     /**

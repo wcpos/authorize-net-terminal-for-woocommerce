@@ -18,6 +18,10 @@
         {
             "op": "cancel",
             "request": "action=action_1 mode=test sent=none"
+        },
+        {
+            "op": "fetch",
+            "request": "action=action_1 mode=test sent=list"
         }
     ]
 }

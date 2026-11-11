@@ -4,7 +4,8 @@ namespace WCPOS\WooCommercePOS\AuthorizeNetTerminal\Server;
 
 /**
  * One record per ledger row (option antwc_action_<row_id>, not autoloaded): what the leg is for, and
- * the Authorize.net transaction it claimed once one was verified.
+ * the Authorize.net transaction it claimed once one was verified. A cancel is first a request
+ * (cancel_requested_at); the next fetch decides it.
  */
 class Action_Store
 {
@@ -39,6 +40,7 @@ class Action_Store
             'mode' => $mode,
             'created_at' => $now,
             'cancelled' => false,
+            'cancel_requested_at' => null,
             'claim' => null,
         );
         add_option(self::PREFIX . $row_id, wp_json_encode($record), '', 'no');
@@ -60,6 +62,7 @@ class Action_Store
             return null;
         }
         $record['cancelled'] = !empty($record['cancelled']);
+        $record['cancel_requested_at'] = isset($record['cancel_requested_at']) && is_int($record['cancel_requested_at']) ? $record['cancel_requested_at'] : null;
         $record['claim'] = isset($record['claim']) && is_array($record['claim']) ? $record['claim'] : null;
 
         return $record;
@@ -76,6 +79,11 @@ class Action_Store
     public function mark_cancelled(string $row_id): void
     {
         $this->patch($row_id, 'cancelled', true);
+    }
+
+    public function request_cancel(string $row_id, int $now): void
+    {
+        $this->patch($row_id, 'cancel_requested_at', $now);
     }
 
     public static function valid_id(string $row_id): bool

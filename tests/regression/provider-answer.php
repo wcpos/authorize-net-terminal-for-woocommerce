@@ -38,10 +38,10 @@ $result = $provider->answer('antwc:row-a', 'p', 'txn:4001');
 antwc_assert_same(array('in_progress', 'That payment is already recorded on order #303.'), array($result['status'], $result['prompt']['lines'][0]), 'provider-answer: a transaction already on another order is refused');
 
 antwc_answer_setup();
-antwc_test_tap('4001', 12.34, $now + 5, array('settleAmount' => 1.0, 'authAmount' => 1.0));
+antwc_test_tap('4001', 12.34, $now + 5, array('submitTimeUTC' => antwc_test_time($now - 901)));
 $result = $provider->answer('antwc:row-a', 'p', 'txn:4001');
-antwc_assert_same(array('in_progress', 'That Authorize.net payment is not for USD 12.34.'), array($result['status'], $result['prompt']['lines'][0]), 'provider-answer: a pick with the wrong amount (details differ from list) -> in_progress');
-antwc_assert_same(array(), $GLOBALS['wpdb']->rows, 'provider-answer: wrong amount, no claim');
+antwc_assert_same(array('in_progress', 'That Authorize.net payment was taken before this sale started.'), array($result['status'], $result['prompt']['lines'][0]), 'provider-answer: a pick too old by its details (details differ from list) -> in_progress');
+antwc_assert_same(array(), $GLOBALS['wpdb']->rows, 'provider-answer: too old, no claim');
 antwc_assert_same(array('txn:4001'), array_column($result['prompt']['buttons'], 'id'), 'provider-answer: refusal prompt lists current candidates');
 
 foreach (array('declined', 'voided') as $status) {

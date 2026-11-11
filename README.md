@@ -23,6 +23,9 @@ Requires WooCommerce POS Pro 2.0 or later.
 - WCPOS completes the payment by itself when it finds exactly one new Authorize.net payment of that
   amount.
 - When several payments match, pick yours on the order-pay page. The till shows "waiting" until you do.
+- A declined card fails the payment. Start a new payment in WCPOS before tapping again.
+- Cancelling asks WCPOS to stop waiting. If exactly one new payment of that amount has arrived, it is
+  recorded and the payment completes instead; otherwise the payment is cancelled.
 
 ## Assumptions
 
@@ -39,10 +42,17 @@ We could not ask a merchant or test a phone, so these are assumptions, not teste
 
 - An Authorize.net transaction can be recorded once, ever, on one payment.
 - Every failed check refuses: when anything about a transaction does not match, it is not recorded.
+- When the amount or currency Authorize.net reports differs from the WCPOS payment, the payment fails
+  with "amount mismatch" and an order note that shows what Authorize.net took. Refund or record that
+  transaction by hand.
+- A decline for the same amount, from any register, fails a payment that is still waiting and has no
+  approved payment of that amount to match. That is the safe direction: the cashier starts again, and
+  no money is recorded.
 - Before Authorize.net settles a payment, only a full refund is possible (it voids the payment).
   Partial refunds work after settlement, which is usually overnight.
 - Authorize.net refuses an identical refund repeated within 8 hours.
-- If a WCPOS payment is cancelled after the card was tapped, that Authorize.net transaction stays
+- A cancel completes the payment instead when one new payment of that amount has arrived. If several
+  have arrived, or the card is tapped after the cancel, that Authorize.net transaction stays
   unrecorded. Refund it in the Merchant Interface, or start a new WCPOS payment within 15 minutes and
   pick it from the list.
 - Registers taking the same amount in the same second may get each other's transaction. The money is
@@ -67,10 +77,17 @@ For developers. The plugin registers a server provider with WCPOS Pro
   amount, submitted at most 15 minutes before the payment started, and not recorded elsewhere. When
   auto-match is on and exactly one candidate was submitted no earlier than 30 seconds before the start,
   it is verified and claimed. Otherwise the till gets a pick-list whose buttons are `txn:<transId>`.
+  When nothing captured fits and a same-amount decline was submitted since the start (less 30 s), the
+  leg fails with `declined`.
 - **Verify and claim**: `getTransactionDetails` must show a captured sale (responseCode 1) for exactly
   the amount, in a currency `getMerchantDetails` lists, submitted inside the window. The claim is an
   insert-once option per environment and transaction id, so one transaction never pays two orders.
-- **Cancel** ends the leg at once before a claim; after a claim it is refused (refund instead). An
+  An amount or currency mismatch is not claimed: fetch reports it `completed` with the details'
+  `settleAmount` and the merchant's currency, so Free fails the row with `amount_mismatch`.
+- **Cancel** before a claim stores the request and returns `requested`; after a claim it is refused
+  (refund instead). The next fetch claims a single fresh candidate (whatever the auto-match setting)
+  and completes, or else cancels; it never prompts, and a failed request stays indeterminate. A
+  doubt about a listed tap stays indeterminate. An
   action created in one environment fails with `mode_changed` if the gateway is switched to the other.
 - **Refund** voids an unsettled transaction (full amount only) or sends `refundTransaction` for a
   settled one. responseCode 4 (held for review) is reported as pending.

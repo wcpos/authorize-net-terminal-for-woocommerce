@@ -26,20 +26,25 @@ final class Fake_Authorize_Net_Transport
     private $batches = array();
     private $refund_code = '1';
     private $currencies = array('USD');
+    /** Fields getTransactionDetails reports differently from the list (a scenario's mismatch). */
+    private $details_overrides = array();
     private $seq = 0;
 
     /**
      * Arm a scenario: the app transactions each successive fetch finds newly listed, the responseCode a
-     * refund gets, and the currencies the merchant account settles in.
+     * refund gets, the currencies the merchant account settles in, and the details fields that differ
+     * from what the list shows.
      *
      * @param array<int, array<int, string>> $batches
      * @param string[] $currencies
+     * @param array<string, mixed> $details_overrides
      */
-    public function script(array $batches, string $refund_code = '1', array $currencies = array('USD')): void
+    public function script(array $batches, string $refund_code = '1', array $currencies = array('USD'), array $details_overrides = array()): void
     {
         $this->batches = $batches;
         $this->refund_code = $refund_code;
         $this->currencies = $currencies;
+        $this->details_overrides = $details_overrides;
     }
 
     /** Called on entry to fetch(): the next batch of app taps reaches the unsettled list. */
@@ -132,7 +137,7 @@ final class Fake_Authorize_Net_Transport
         $this->sent[] = 'details';
         $id = (string) ($request['transId'] ?? '');
 
-        return isset($this->transactions[$id]) ? self::answer(array('transaction' => $this->transactions[$id])) : self::answer(array(), 'Error', 'E00040', 'The record cannot be found.');
+        return isset($this->transactions[$id]) ? self::answer(array('transaction' => array_merge($this->transactions[$id], $this->details_overrides))) : self::answer(array(), 'Error', 'E00040', 'The record cannot be found.');
     }
 
     /** @param array<string, mixed> $request */
