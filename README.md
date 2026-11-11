@@ -92,6 +92,12 @@ For developers. The plugin registers a server provider with WCPOS Pro
 - **Refund** voids an unsettled transaction (full amount only) or sends `refundTransaction` for a
   settled one. responseCode 4 (held for review) is reported as pending.
 
+## Beta zip
+
+Every pull request builds an installable `authorize-net-terminal-for-woocommerce.zip`: open the
+"Beta zip" workflow run and download it from the run's Artifacts list (kept 14 days). It is a test
+build, not a release. `bash scripts/build-zip.sh <out-dir>` builds the same zip locally.
+
 ## Development
 
 ```sh
