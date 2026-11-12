@@ -1,0 +1,37 @@
+name: Beta zip
+
+# Builds the installable plugin zip as a workflow artifact only. Nothing is published or tagged.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup PHP 7.4
+        uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # v2.35.5
+        with:
+          php-version: '7.4'
+          coverage: none
+      - name: Build zip
+        id: build
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          bash scripts/build-zip.sh "$RUNNER_TEMP/out"
+          echo "short_sha=${HEAD_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Upload zip
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: authorize-net-terminal-for-woocommerce-${{ steps.build.outputs.version }}-${{ steps.build.outputs.short_sha }}
+          path: ${{ runner.temp }}/out/authorize-net-terminal-for-woocommerce.zip
+          retention-days: 14
+          if-no-files-found: error
