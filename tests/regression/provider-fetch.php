@@ -40,6 +40,21 @@ antwc_assert_same(array('12.34', 'USD'), array($result['amount'], $result['curre
 antwc_assert_same(array('card_label' => 'Visa', 'card_last4' => '1111', 'auth_code' => 'ABC123', 'read_method' => 'authorize_net_app'), $result['receipt'], 'provider-fetch: receipt');
 antwc_assert_same(true, isset($GLOBALS['wpdb']->rows['antwc_claim_sandbox_4001']), 'provider-fetch: auto-match claimed the transaction');
 
+$ref = antwc_fetch_setup();
+for ($i = 55; $i >= 1; $i--) {
+    antwc_test_tap((string) (5000 + $i), 99.00, $now + $i + 5);
+}
+antwc_test_tap('4001', 12.34, $now + 5);
+$result = $provider->fetch($ref);
+antwc_assert_same(array('completed', '4001'), array($result['status'], $result['provider_refs']['transaction_id']), 'provider-fetch: a tap below 50 newer transactions still matches');
+
+$ref = antwc_fetch_setup();
+$older = antwc_test_provider($now - 1000)->create_reader_action(antwc_test_row('row-b'), 'authorize-net-app');
+$provider->fetch($ref);
+antwc_assert_same(1, Antwc_Fake_Http::count('getUnsettledTransactionListRequest'), 'provider-fetch: recent leg caches one list read');
+$provider->fetch($older['ref']);
+antwc_assert_same(2, Antwc_Fake_Http::count('getUnsettledTransactionListRequest'), 'provider-fetch: an older leg refetches past a newer cached list');
+
 $ref = antwc_fetch_setup(array('auto_match' => 'no'));
 antwc_test_tap('4001', 12.34, $now + 5);
 $result = $provider->fetch($ref);

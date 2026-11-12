@@ -91,11 +91,14 @@ final class Antwc_Fake_Http
     {
         $ok = array('resultCode' => 'Ok', 'message' => array(array('code' => 'I00001', 'text' => 'Successful.')));
         if ($name === 'getUnsettledTransactionListRequest') {
-            if (count(self::$unsettled) === 0) {
+            $limit = (int) ($body['paging']['limit'] ?? 50);
+            $offset = (int) ($body['paging']['offset'] ?? 1);
+            $items = array_slice(self::$unsettled, ($offset - 1) * $limit, $limit);
+            if (count($items) === 0) {
                 return array('messages' => array('resultCode' => 'Ok', 'message' => array(array('code' => 'I00004', 'text' => 'No records found.'))));
             }
 
-            return array('transactions' => self::$unsettled, 'messages' => $ok);
+            return array('transactions' => $items, 'messages' => $ok);
         }
         if ($name === 'getTransactionDetailsRequest') {
             $id = (string) ($body['transId'] ?? '');
