@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Authorize.net Tap to Pay for WooCommerce POS
  * Description: Take card payments in the Authorize.net phone app and record them in WooCommerce POS.
- * Version: 0.1.0-beta1
+ * Version: 0.1.0
  * Author: kilbot
  * License: GPL-3.0-or-later
  * Requires PHP: 7.4
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('ANTWC_VERSION', '0.1.0-beta1');
+define('ANTWC_VERSION', '0.1.0');
 define('ANTWC_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('ANTWC_PLUGIN_URL', plugin_dir_url(__FILE__));
 

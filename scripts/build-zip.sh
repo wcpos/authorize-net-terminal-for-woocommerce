@@ -25,7 +25,7 @@ mkdir -p "$STAGE/$SLUG"
 # Tracked files only, minus development material.
 git ls-files -z | while IFS= read -r -d '' f; do
   case "$f" in
-    .github/*|tests/*|scripts/*|.gitignore|.wp-env.json|phpunit*.xml.dist|composer.json|composer.lock|AGENTS.md) continue ;;
+    .github/*|tests/*|scripts/*|docs/*|.gitignore|.wp-env.json|phpunit*.xml.dist|composer.json|composer.lock|AGENTS.md) continue ;;
   esac
   mkdir -p "$STAGE/$SLUG/$(dirname "$f")"
   cp -p "$f" "$STAGE/$SLUG/$f"
