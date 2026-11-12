@@ -1,7 +1,9 @@
 name: Release
 
 on:
-  push:
+  workflow_run:
+    workflows: [Test]
+    types: [completed]
     branches: [main]
 
 concurrency: { group: release, cancel-in-progress: false }
@@ -11,11 +13,15 @@ permissions:
 
 jobs:
   release:
+    # Only a green Test run of a push to this repo's main releases.
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-tags: true
           persist-credentials: false
           fetch-depth: 0
 
@@ -26,12 +32,28 @@ jobs:
         run: |
           set -euo pipefail
           VERSION=$(sed -n 's/^[[:space:]]*\*[[:space:]]*Version:[[:space:]]*\([^[:space:]]*\).*/\1/p' authorize-net-terminal-for-woocommerce.php | head -n1)
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1 || gh release view "v$VERSION" >/dev/null 2>&1; then
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta[0-9]+)?$ ]]
+          PRERELEASE=false
+          if [[ "$VERSION" == *-beta* ]]; then PRERELEASE=true; fi
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "v$VERSION exists; nothing to publish"
           else
-            echo "publish=true" >> "$GITHUB_OUTPUT"
+            RELEASE_DRAFT=$(gh release view "v$VERSION" --json isDraft --jq .isDraft 2>/dev/null || true)
+            case "$RELEASE_DRAFT" in
+              true)
+                printf 'publish=true\ndraft=true\n' >> "$GITHUB_OUTPUT"
+                echo "v$VERSION has a leftover draft; it will be replaced"
+                ;;
+              false)
+                echo "publish=false" >> "$GITHUB_OUTPUT"
+                echo "v$VERSION is published without a fetched tag; nothing to publish"
+                ;;
+              "")
+                printf 'publish=true\ndraft=false\n' >> "$GITHUB_OUTPUT"
+                ;;
+            esac
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -51,7 +73,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.check.outputs.version }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          DRAFT: ${{ steps.check.outputs.draft }}
+          PRERELEASE: ${{ steps.check.outputs.prerelease }}
         run: |
           set -euo pipefail
           test -f "docs/releases/$VERSION.md"
-          gh release create "v$VERSION" "$RUNNER_TEMP/out/authorize-net-terminal-for-woocommerce.zip" --target "$GITHUB_SHA" --title "v$VERSION" --notes-file "docs/releases/$VERSION.md" --latest
+          if [[ "$DRAFT" == true ]]; then
+            gh release delete "v$VERSION" --yes
+          fi
+          if [[ "$PRERELEASE" == true ]]; then
+            RELEASE_FLAGS=(--prerelease --latest=false)
+          else
+            RELEASE_FLAGS=(--latest)
+          fi
+          gh release create "v$VERSION" "$RUNNER_TEMP/out/authorize-net-terminal-for-woocommerce.zip" --target "$HEAD_SHA" --title "v$VERSION" --notes-file "docs/releases/$VERSION.md" "${RELEASE_FLAGS[@]}"
