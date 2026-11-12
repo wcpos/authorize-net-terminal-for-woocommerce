@@ -106,7 +106,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
 
         try {
             $client = $this->client();
-            $list = $this->unsettled($client);
+            $list = $this->unsettled($client, (int) $action['created_at'] - self::LOOKBACK_SECONDS);
             $candidates = $this->candidates($list, $action);
             $refusal = null;
             // A cancel-requested leg has no till left to answer a prompt, so it auto-matches whatever the setting.
@@ -186,7 +186,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
             }
 
             // A refusal never ends the leg: the cashier can pick another or cancel.
-            return self::prompt_observation($action, $this->candidates($this->unsettled($client), $action), $result);
+            return self::prompt_observation($action, $this->candidates($this->unsettled($client, (int) $action['created_at'] - self::LOOKBACK_SECONDS), $action), $result);
         } catch (AuthorizeNetException $e) {
             return $this->api_unavailable($e);
         } catch (\RuntimeException $e) {
@@ -274,6 +274,10 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
         $ref = isset($allocation['provider_ref']) && is_scalar($allocation['provider_ref']) ? (string) $allocation['provider_ref'] : '';
         if (preg_match('/^\d{1,20}$/', $ref) !== 1) {
             return new \WP_Error('antwc_refund_no_transaction', __('This refund has no Authorize.net transaction to read.', 'authorize-net-terminal-for-woocommerce'), array('status' => 400));
+        }
+        $refs = isset($row['provider_refs']) && is_array($row['provider_refs']) ? $row['provider_refs'] : array();
+        if (isset($refs['mode']) && is_string($refs['mode']) && $refs['mode'] !== '' && $refs['mode'] !== Settings::environment()) {
+            return $this->indeterminate('antwc_refund_mode_mismatch', __('This refund was made in the other Authorize.net environment. Switch the environment back to read it, or check the Authorize.net Merchant Interface.', 'authorize-net-terminal-for-woocommerce'));
         }
 
         try {
@@ -472,15 +476,15 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
     /**
      * @return array<int, array<string, mixed>>
      */
-    private function unsettled(AuthorizeNetClient $client): array
+    private function unsettled(AuthorizeNetClient $client, int $not_before): array
     {
         $key = 'antwc_unsettled_' . md5(Settings::endpoint() . '|' . Settings::api_login_id());
         $cached = get_transient($key);
-        if (is_array($cached)) {
-            return $cached;
+        if (is_array($cached) && isset($cached['not_before'], $cached['list']) && is_int($cached['not_before']) && is_array($cached['list']) && $cached['not_before'] <= $not_before) {
+            return $cached['list'];
         }
-        $list = $client->unsettled_transactions();
-        set_transient($key, $list, self::LIST_CACHE_SECONDS);
+        $list = $client->unsettled_transactions($not_before);
+        set_transient($key, array('not_before' => $not_before, 'list' => $list), self::LIST_CACHE_SECONDS);
 
         return $list;
     }
