@@ -112,6 +112,23 @@ Antwc_Fake_Http::$raw = json_encode(array('messages' => array('resultCode' => 'E
 $result = $provider->fetch($ref);
 antwc_assert_same('Turn on the Transaction Details API in the Authorize.net Merchant Interface (Account → Settings → Transaction Details API).', $result->get_error_message(), 'provider-fetch: E00011 message');
 
+$antwc_credentials_message = 'Authorize.net did not accept the API Login ID or Transaction Key. Check them, and that the Environment matches the account, in WooCommerce → Settings → Payments → Authorize.net Tap to Pay.';
+$ref = antwc_fetch_setup();
+Antwc_Fake_Http::$raw = json_encode(array('messages' => array('resultCode' => 'Error', 'message' => array(array('code' => 'E00007', 'text' => 'User authentication failed due to invalid authentication values.')))));
+$result = $provider->fetch($ref);
+antwc_assert_same($antwc_credentials_message, $result->get_error_message(), 'provider-fetch: E00007 settings message');
+antwc_assert_same(array('antwc_api_unavailable', true), array(antwc_test_code($result), $result->get_error_data()['indeterminate']), 'provider-fetch: E00007 keeps the code and indeterminate data');
+
+$ref = antwc_fetch_setup();
+Antwc_Fake_Http::$raw = json_encode(array('messages' => array('resultCode' => 'Error', 'message' => array(array('code' => 'E00003', 'text' => "The 'AnetApi/xml/v1/schema/AnetApiSchema.xsd:transactionKey' element is invalid - The value XXXXXXXX is invalid according to its datatype 'String' - The actual length is greater than the MaxLength value.")))));
+$result = $provider->fetch($ref);
+antwc_assert_same($antwc_credentials_message, $result->get_error_message(), 'provider-fetch: E00003 credential element -> settings message');
+
+$ref = antwc_fetch_setup();
+Antwc_Fake_Http::$raw = json_encode(array('messages' => array('resultCode' => 'Error', 'message' => array(array('code' => 'E00003', 'text' => "The element 'paging' has invalid child element 'offset'.")))));
+$result = $provider->fetch($ref);
+antwc_assert_same(false, $result->get_error_message() === $antwc_credentials_message, 'provider-fetch: other E00003 keeps the API text');
+
 $ref = antwc_fetch_setup();
 antwc_test_tap('4001', 12.34, $now + 5);
 $provider->fetch($ref);
