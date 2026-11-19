@@ -642,9 +642,17 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
 
     private function api_unavailable(AuthorizeNetException $e): \WP_Error
     {
-        $message = $e->getApiCode() === 'E00011'
-            ? __('Turn on the Transaction Details API in the Authorize.net Merchant Interface (Account → Settings → Transaction Details API).', 'authorize-net-terminal-for-woocommerce')
-            : Logger::redact_untrusted_text($e->getMessage());
+        $code = $e->getApiCode();
+        // E00003 is a schema error; it is a settings problem only when it names a credential element.
+        $credentials = $code === 'E00007'
+            || ($code === 'E00003' && preg_match('/AnetApiSchema\.xsd:(transactionKey|name)\'/', $e->getMessage()) === 1);
+        if ($code === 'E00011') {
+            $message = __('Turn on the Transaction Details API in the Authorize.net Merchant Interface (Account → Settings → Transaction Details API).', 'authorize-net-terminal-for-woocommerce');
+        } elseif ($credentials) {
+            $message = __('Authorize.net did not accept the API Login ID or Transaction Key. Check them, and that the Environment matches the account, in WooCommerce → Settings → Payments → Authorize.net Tap to Pay.', 'authorize-net-terminal-for-woocommerce');
+        } else {
+            $message = Logger::redact_untrusted_text($e->getMessage());
+        }
 
         return $this->indeterminate('antwc_api_unavailable', $message);
     }
