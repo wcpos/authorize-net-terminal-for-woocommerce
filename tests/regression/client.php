@@ -8,7 +8,7 @@ antwc_test_reset();
 $client = new AuthorizeNetClient(Settings::SANDBOX_ENDPOINT, 'test-login', 'test-key');
 $auth = '"merchantAuthentication":{"name":"test-login","transactionKey":"test-key"}';
 
-$client->unsettled_transactions();
+$client->unsettled_transactions(ANTWC_TEST_NOW - 900);
 antwc_assert_same(
     '{"getUnsettledTransactionListRequest":{' . $auth . ',"sorting":{"orderBy":"submitTimeUTC","orderDescending":true},"paging":{"limit":"50","offset":"1"}}}',
     Antwc_Fake_Http::$requests[0]['args']['body'],
@@ -49,11 +49,58 @@ Antwc_Fake_Http::$raw = "\xEF\xBB\xBF" . json_encode(array('transaction' => arra
 antwc_assert_same(array('transId' => '9'), $client->transaction_details('9'), 'client: BOM stripped before json_decode');
 
 antwc_test_reset();
-antwc_assert_same(array(), $client->unsettled_transactions(), 'client: I00004 is an empty list');
+antwc_assert_same(array(), $client->unsettled_transactions(ANTWC_TEST_NOW - 900), 'client: I00004 is an empty list');
 
 antwc_test_reset();
 Antwc_Fake_Http::$unsettled[] = array('transId' => '1', 'settleAmount' => 1.5);
-antwc_assert_same(array(array('transId' => '1', 'settleAmount' => 1.5)), $client->unsettled_transactions(), 'client: transactions list returned');
+antwc_assert_same(array(array('transId' => '1', 'settleAmount' => 1.5)), $client->unsettled_transactions(ANTWC_TEST_NOW - 900), 'client: transactions list returned');
+
+antwc_test_reset();
+for ($i = 1; $i <= 120; $i++) {
+    antwc_test_tap((string) $i, 12.34, ANTWC_TEST_NOW - $i);
+}
+$list = $client->unsettled_transactions(ANTWC_TEST_NOW - 900);
+$offsets = array();
+foreach (Antwc_Fake_Http::$requests as $request) {
+    $offsets[] = $request['payload']['getUnsettledTransactionListRequest']['paging']['offset'];
+}
+antwc_assert_same(
+    array(Antwc_Fake_Http::$unsettled, 3, array('1', '2', '3')),
+    array($list, Antwc_Fake_Http::count('getUnsettledTransactionListRequest'), $offsets),
+    'client: unsettled list pages until a short page'
+);
+
+antwc_test_reset();
+for ($i = 1; $i <= 70; $i++) {
+    antwc_test_tap((string) $i, 12.34, ANTWC_TEST_NOW - ($i < 50 ? $i : 900 + $i));
+}
+$list = $client->unsettled_transactions(ANTWC_TEST_NOW - 900);
+antwc_assert_same(
+    array(array_slice(Antwc_Fake_Http::$unsettled, 0, 50), 1),
+    array($list, Antwc_Fake_Http::count('getUnsettledTransactionListRequest')),
+    'client: unsettled list stops at not_before'
+);
+
+antwc_test_reset();
+for ($i = 1; $i <= 60; $i++) {
+    antwc_test_tap((string) ($i === 51 ? 50 : $i), 12.34, ANTWC_TEST_NOW - $i);
+}
+antwc_assert_same(
+    array_merge(array_slice(Antwc_Fake_Http::$unsettled, 0, 50), array_slice(Antwc_Fake_Http::$unsettled, 51)),
+    $client->unsettled_transactions(ANTWC_TEST_NOW - 900),
+    'client: unsettled list drops a transId repeated across pages'
+);
+
+antwc_test_reset();
+for ($i = 1; $i <= 1100; $i++) {
+    antwc_test_tap((string) $i, 12.34, ANTWC_TEST_NOW - intdiv($i, 2));
+}
+$list = $client->unsettled_transactions(ANTWC_TEST_NOW - 900);
+antwc_assert_same(
+    array(array_slice(Antwc_Fake_Http::$unsettled, 0, 1000), 20),
+    array($list, Antwc_Fake_Http::count('getUnsettledTransactionListRequest')),
+    'client: unsettled list stops at 20 pages'
+);
 
 /**
  * @return AuthorizeNetException|null
@@ -81,7 +128,7 @@ antwc_assert_same('E00007', get_option('antwc_last_api_error')['code'], 'client:
 antwc_test_reset();
 Antwc_Fake_Http::$failure = 'wp_error';
 $e = antwc_client_throws(static function () use ($client) {
-    $client->unsettled_transactions();
+    $client->unsettled_transactions(ANTWC_TEST_NOW - 900);
 });
 antwc_assert_same(true, $e !== null && $e->isIndeterminate(), 'client: WP_Error is indeterminate');
 
