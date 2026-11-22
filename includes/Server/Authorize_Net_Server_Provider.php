@@ -106,7 +106,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
 
         try {
             $client = $this->client();
-            $list = $this->unsettled($client, (int) $action['created_at'] - self::LOOKBACK_SECONDS);
+            $list = $this->unsettled($client, (int) $action['created_at'] - self::LOOKBACK_SECONDS, $complete);
             $candidates = $this->candidates($list, $action);
             $refusal = null;
             // A cancel-requested leg has no till left to answer a prompt, so it auto-matches whatever the setting.
@@ -144,12 +144,16 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
             if ($requested && $refusal !== null && in_array($refusal['reason'], array('not_found', 'in_future'), true)) {
                 return $this->indeterminate('antwc_cancel_undecided', __('Authorize.net lists a payment for this sale that could not be checked yet. Try again.', 'authorize-net-terminal-for-woocommerce'));
             }
+            // A list cut at the page cap proves no absence: neither cancel nor decline on it.
+            if ($requested && $complete !== true) {
+                return $this->indeterminate('antwc_list_incomplete', __('Authorize.net lists too many recent payments to rule this one out yet. Try again.', 'authorize-net-terminal-for-woocommerce'));
+            }
             if ($requested) {
                 $this->actions->mark_cancelled((string) $action['row_id']);
 
                 return self::cancelled_observation();
             }
-            if (count($candidates) === 0 && self::declined_since($list, $action)) {
+            if ($complete === true && count($candidates) === 0 && self::declined_since($list, $action)) {
                 return array('status' => 'failed', 'amount' => null, 'currency' => null, 'failure_reason' => 'declined');
             }
 
@@ -474,17 +478,20 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
     }
 
     /**
+     * @param bool|null $complete Set false when the list may not reach $not_before (cut at the page cap).
      * @return array<int, array<string, mixed>>
      */
-    private function unsettled(AuthorizeNetClient $client, int $not_before): array
+    private function unsettled(AuthorizeNetClient $client, int $not_before, ?bool &$complete = null): array
     {
         $key = 'antwc_unsettled_' . md5(Settings::endpoint() . '|' . Settings::api_login_id());
         $cached = get_transient($key);
-        if (is_array($cached) && isset($cached['not_before'], $cached['list']) && is_int($cached['not_before']) && is_array($cached['list']) && $cached['not_before'] <= $not_before) {
+        if (is_array($cached) && isset($cached['not_before'], $cached['list']) && is_int($cached['not_before']) && is_array($cached['list']) && is_bool($cached['complete'] ?? null) && $cached['not_before'] <= $not_before) {
+            $complete = $cached['complete'];
+
             return $cached['list'];
         }
-        $list = $client->unsettled_transactions($not_before);
-        set_transient($key, array('not_before' => $not_before, 'list' => $list), self::LIST_CACHE_SECONDS);
+        $list = $client->unsettled_transactions($not_before, $complete);
+        set_transient($key, array('not_before' => $not_before, 'list' => $list, 'complete' => $complete), self::LIST_CACHE_SECONDS);
 
         return $list;
     }

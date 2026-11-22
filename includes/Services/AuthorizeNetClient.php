@@ -48,10 +48,12 @@ class AuthorizeNetClient
     /**
      * Unsettled transactions, newest first.
      *
+     * @param bool|null $complete Set false when the page cap cut the list before it reached $not_before.
      * @return array<int, array<string, mixed>>
      */
-    public function unsettled_transactions(int $not_before): array
+    public function unsettled_transactions(int $not_before, ?bool &$complete = null): array
     {
+        $complete = true;
         $list = array();
         $seen = array();
         for ($page = 1; $page <= self::LIST_MAX_PAGES; $page++) {
@@ -76,10 +78,17 @@ class AuthorizeNetClient
             if (count($items) < self::LIST_PAGE_SIZE) {
                 break;
             }
-            $last = $items[count($items) - 1]['submitTimeUTC'] ?? '';
-            $submitted = TransactionVerifier::parse_utc(is_string($last) ? $last : '');
-            if ($submitted === null || $submitted < $not_before) {
+            // The page's last readable time; an unreadable one keeps paging, bounded by the cap.
+            $submitted = null;
+            for ($i = count($items) - 1; $i >= 0 && $submitted === null; $i--) {
+                $last = $items[$i]['submitTimeUTC'] ?? '';
+                $submitted = TransactionVerifier::parse_utc(is_string($last) ? $last : '');
+            }
+            if ($submitted !== null && $submitted < $not_before) {
                 break;
+            }
+            if ($page === self::LIST_MAX_PAGES) {
+                $complete = false;
             }
         }
 

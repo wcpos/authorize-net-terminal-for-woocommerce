@@ -102,6 +102,35 @@ antwc_assert_same(
     'client: unsettled list stops at 20 pages'
 );
 
+antwc_test_reset();
+for ($i = 1; $i <= 1100; $i++) {
+    antwc_test_tap((string) $i, 12.34, ANTWC_TEST_NOW - intdiv($i, 2));
+}
+$complete = null;
+$client->unsettled_transactions(ANTWC_TEST_NOW - 900, $complete);
+antwc_assert_same(false, $complete, 'client: 20 full pages all newer than the floor -> incomplete');
+
+antwc_test_reset();
+for ($i = 1; $i <= 120; $i++) {
+    antwc_test_tap((string) $i, 12.34, ANTWC_TEST_NOW - $i);
+}
+$complete = null;
+$client->unsettled_transactions(ANTWC_TEST_NOW - 900, $complete);
+antwc_assert_same(true, $complete, 'client: a short page -> complete');
+
+antwc_test_reset();
+for ($i = 1; $i <= 60; $i++) {
+    antwc_test_tap((string) $i, 12.34, ANTWC_TEST_NOW - $i);
+}
+Antwc_Fake_Http::$unsettled[49]['submitTimeUTC'] = 'not a time';
+$complete = null;
+$list = $client->unsettled_transactions(ANTWC_TEST_NOW - 900, $complete);
+antwc_assert_same(
+    array(60, 2, true),
+    array(count($list), Antwc_Fake_Http::count('getUnsettledTransactionListRequest'), $complete),
+    'client: an unreadable last time on a full page keeps paging to the short page -> complete'
+);
+
 /**
  * @return AuthorizeNetException|null
  */
