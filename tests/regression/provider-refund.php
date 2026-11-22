@@ -116,6 +116,13 @@ $result = $provider->fetch_refund(antwc_refund_row(), array('provider_ref' => '5
 antwc_assert_same(true, $result->get_error_data()['indeterminate'], 'provider-refund: fetch_refund exception -> indeterminate');
 
 antwc_test_reset();
+Antwc_Fake_Http::$details['5001'] = array('transId' => '5001', 'transactionStatus' => 'refundSettledSuccessfully');
+$result = $provider->fetch_refund(antwc_refund_row(array('mode' => 'production')), array('provider_ref' => '5001'));
+antwc_assert_same('antwc_refund_mode_mismatch', antwc_test_code($result), 'provider-refund: fetch_refund in the other environment -> indeterminate');
+antwc_assert_same(true, $result->get_error_data()['indeterminate'], 'provider-refund: fetch_refund mode mismatch is indeterminate');
+antwc_assert_same(0, Antwc_Fake_Http::count('getTransactionDetailsRequest'), 'provider-refund: fetch_refund mode mismatch sends nothing');
+
+antwc_test_reset();
 update_option('antwc_last_api_error', array('code' => 'E00007', 'text' => 'User authentication failed.', 'time' => $now));
 $gateway = new WC_Payment_Gateway();
 $diagnostics = $provider->diagnostics($gateway);
