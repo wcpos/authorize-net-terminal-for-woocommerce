@@ -112,3 +112,10 @@ $ref = antwc_fetch_setup();
 antwc_test_tap('4001', 12.34, $now + 5);
 $result = $provider->fetch($ref);
 antwc_assert_same(array('completed', '12.34'), array($result['status'], $result['amount']), 'provider-tip: T4 an exact amount still auto-matches');
+
+antwc_test_reset(array('auto_match' => 'no'));
+antwc_test_provider()->create_reader_action(antwc_test_row('row-a', '12.34', 101), 'authorize-net-app');
+antwc_test_tap('4002', 15.0, $now + 9);
+antwc_test_tap('4001', 12.34, $now + 5);
+$result = $provider->fetch('antwc:row-a');
+antwc_assert_same(array('in_progress', array('txn:4001', 'txn:4002')), array($result['status'], array_column($result['prompt']['buttons'], 'id')), 'provider-tip: T5 exact amounts are offered before newer tipped payments');

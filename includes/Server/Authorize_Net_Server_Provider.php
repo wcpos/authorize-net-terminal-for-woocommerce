@@ -401,7 +401,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
     }
 
     /**
-     * Candidate transactions for a leg, newest first: captured, at least the sale amount, recent enough, not another
+     * Candidate transactions for a leg, exact amounts first, then newest first: captured, at least the sale amount, recent enough, not another
      * row's. "ours" marks one this row has already claimed.
      *
      * @param array<int, array<string, mixed>> $list The unsettled list.
@@ -443,7 +443,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
         }
 
         usort($candidates, static function (array $a, array $b) {
-            return $b['submitted'] <=> $a['submitted'] ?: strcmp($b['trans_id'], $a['trans_id']);
+            return $a['tip'] <=> $b['tip'] ?: $b['submitted'] <=> $a['submitted'] ?: strcmp($b['trans_id'], $a['trans_id']);
         });
 
         return array_slice($candidates, 0, self::MAX_CANDIDATES);
