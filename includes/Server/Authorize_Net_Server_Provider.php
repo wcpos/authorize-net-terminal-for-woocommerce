@@ -143,7 +143,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
             if ($requested && $ours_refused) {
                 return $this->indeterminate('antwc_claim_unverified', __('This payment was recorded by this sale but could not be verified with Authorize.net. Try again.', 'authorize-net-terminal-for-woocommerce'));
             }
-            if ($requested && $refusal !== null && in_array($refusal['reason'], array('not_found', 'in_future', 'amount_differs'), true)) {
+            if ($requested && $refusal !== null && in_array($refusal['reason'], array('not_found', 'in_future'), true)) {
                 return $this->indeterminate('antwc_cancel_undecided', __('Authorize.net lists a payment for this sale that could not be checked yet. Try again.', 'authorize-net-terminal-for-woocommerce'));
             }
             // A list cut at the page cap proves no absence: neither cancel nor decline on it.
@@ -151,6 +151,23 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
                 return $this->indeterminate('antwc_list_incomplete', __('Authorize.net lists too many recent payments to rule this one out yet. Try again.', 'authorize-net-terminal-for-woocommerce'));
             }
             if ($requested) {
+                $larger = array();
+                foreach ($candidates as $candidate) {
+                    if ($candidate['tip'] && $candidate['submitted'] >= (int) $action['created_at'] - self::AUTO_MATCH_SKEW_SECONDS) {
+                        $larger[$candidate['trans_id']] = $candidate['amount'];
+                    }
+                }
+                if ($refusal !== null && $refusal['reason'] === 'amount_differs') {
+                    $larger[$refusal['trans_id']] = $refusal['amount'];
+                }
+                $order = function_exists('wc_get_order') ? wc_get_order((int) $action['order_id']) : null;
+                foreach ($larger as $trans_id => $amount) {
+                    Logger::log('Cancelled sale left a larger Authorize.net payment unrecorded', array('row_id' => (string) $action['row_id'], 'order_id' => (int) $action['order_id'], 'trans_id' => (string) $trans_id), null, 'warning');
+                    if (is_object($order) && method_exists($order, 'add_order_note')) {
+                        $note = sprintf(__('Authorize.net payment #%1$s for %2$s %3$s is larger than this sale (%2$s %4$s) and was not recorded when the sale was cancelled. Check it in Authorize.net and refund it if it belongs to this sale.', 'authorize-net-terminal-for-woocommerce'), (string) $trans_id, strtoupper((string) $action['currency']), $amount, (string) $action['amount']);
+                        $order->add_order_note($note);
+                    }
+                }
                 $this->actions->mark_cancelled((string) $action['row_id']);
 
                 return self::cancelled_observation();
@@ -364,7 +381,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
         }
 
         if ($exact && Money_Units::minor($verdict['amount'], $verdict['currency']) !== Money_Units::minor((string) $action['amount'], (string) $action['currency'])) {
-            return array('ok' => false, 'reason' => 'amount_differs', 'message' => sprintf(__('Authorize.net shows %1$s %2$s for that payment. Pick it to accept that amount.', 'authorize-net-terminal-for-woocommerce'), $verdict['currency'], $verdict['amount']));
+            return array('ok' => false, 'reason' => 'amount_differs', 'trans_id' => $trans_id, 'amount' => $verdict['amount'], 'message' => sprintf(__('Authorize.net shows %1$s %2$s for that payment. Pick it to accept that amount.', 'authorize-net-terminal-for-woocommerce'), $verdict['currency'], $verdict['amount']));
         }
 
         $row_id = (string) $action['row_id'];
@@ -443,6 +460,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
                 'submitted' => $submitted,
                 'ours' => $holder !== null,
                 'tip' => $tip,
+                'amount' => Money_Units::major($settled, $currency),
                 'label' => sprintf(
                     '%s ••%s · %s · #%s',
                     $card,
