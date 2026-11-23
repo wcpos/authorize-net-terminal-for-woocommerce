@@ -51,7 +51,7 @@ antwc_assert_same('warning', end($GLOBALS['antwc_test_log'])['level'] ?? 'none',
 $ref = antwc_fetch_setup();
 antwc_test_tap('4001', 12.34, $now + 5, array('settleAmount' => 12.35));
 $result = $provider->fetch($ref);
-antwc_assert_same(array('completed', '12.35', 'USD'), array($result['status'], $result['amount'], $result['currency']), 'provider-mismatch: an overpayment is reported as taken');
+antwc_assert_same(array('completed', '12.35', 'USD', true), array($result['status'], $result['amount'], $result['currency'], !empty($GLOBALS['wpdb']->rows)), 'provider-mismatch: a tip in the details is claimed');
 
 $ref = antwc_fetch_setup();
 Antwc_Fake_Http::$currencies = array('EUR', 'GBP');
@@ -92,3 +92,23 @@ foreach (array('not_found' => array('transId' => '9999'), 'wrong_type' => array(
     $result = $provider->fetch($ref);
     antwc_assert_same(array('in_progress', array()), array($result['status'], $GLOBALS['wpdb']->rows), 'provider-mismatch: refusal ' . $reason . ' stays in_progress');
 }
+
+$ref = antwc_fetch_setup();
+antwc_test_tap('4001', 15.0, $now + 5);
+$result = $provider->fetch($ref);
+antwc_assert_same(array('in_progress', array('txn:4001'), array()), array($result['status'], array_column($result['prompt']['buttons'], 'id'), $GLOBALS['wpdb']->rows), 'provider-tip: T1 a listed tip needs a pick and is not claimed by auto-match');
+antwc_assert_same('· USD 15.00', substr($result['prompt']['buttons'][0]['label'], -strlen('· USD 15.00')), 'provider-tip: T1 the button label ends with the captured amount');
+
+$result = $provider->answer('antwc:row-a', $result['prompt']['id'], 'txn:4001');
+antwc_assert_same(array('completed', '15.00', 'USD', '4001', true), array($result['status'], $result['amount'], $result['currency'], $result['provider_refs']['transaction_id'], !empty($GLOBALS['wpdb']->rows)), 'provider-tip: T2 picking the tip completes and claims the captured amount');
+antwc_assert_same('15.00', $provider->fetch($ref)['amount'], 'provider-tip: T2 a later fetch reports the stored captured amount');
+
+$ref = antwc_fetch_setup();
+antwc_test_tap('4001', 12.0, $now + 5);
+$result = $provider->fetch($ref);
+antwc_assert_same(array('in_progress', array()), array($result['status'], $result['prompt']['buttons']), 'provider-tip: T3 an underpayment is not offered');
+
+$ref = antwc_fetch_setup();
+antwc_test_tap('4001', 12.34, $now + 5);
+$result = $provider->fetch($ref);
+antwc_assert_same(array('completed', '12.34'), array($result['status'], $result['amount']), 'provider-tip: T4 an exact amount still auto-matches');

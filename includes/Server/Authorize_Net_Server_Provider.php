@@ -65,9 +65,9 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
 
     public function describe(\WC_Payment_Gateway $gateway): array
     {
-        // The app takes exactly the amount the cashier keys in; no tip is added on the phone.
+        // The app may add a tip, which is reported as part of the captured amount.
         return array(
-            'capabilities' => array('tips' => 'none', 'refunds' => array('via' => 'provider', 'partial' => true), 'void' => true),
+            'capabilities' => array('tips' => 'on_reader', 'refunds' => array('via' => 'provider', 'partial' => true), 'void' => true),
             'provider_data' => array('mode' => Settings::environment()),
         );
     }
@@ -126,7 +126,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
 
             if ($refusal === null && ($requested || Settings::auto_match())) {
                 $fresh = array_values(array_filter($candidates, static function (array $candidate) use ($action) {
-                    return $candidate['submitted'] >= (int) $action['created_at'] - self::AUTO_MATCH_SKEW_SECONDS;
+                    return !$candidate['tip'] && $candidate['submitted'] >= (int) $action['created_at'] - self::AUTO_MATCH_SKEW_SECONDS;
                 }));
                 if (count($fresh) === 1) {
                     $result = $this->verify_and_claim($client, $action, $fresh[0]['trans_id']);
@@ -184,13 +184,19 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
 
         try {
             $client = $this->client();
+            $list = $this->unsettled($client, (int) $action['created_at'] - self::LOOKBACK_SECONDS);
+            if (!array_filter($list, static function (array $item) use ($match, $action) {
+                return self::fits($item, $action) && (string) $item['transId'] === $match[1];
+            })) {
+                return self::prompt_observation($action, $this->candidates($list, $action), array('ok' => false, 'reason' => 'not_listed', 'message' => __('That payment is not one of the payments listed for this sale.', 'authorize-net-terminal-for-woocommerce')));
+            }
             $result = $this->verify_and_claim($client, $action, $match[1]);
             if (isset($result['status'])) {
                 return $result;
             }
 
             // A refusal never ends the leg: the cashier can pick another or cancel.
-            return self::prompt_observation($action, $this->candidates($this->unsettled($client, (int) $action['created_at'] - self::LOOKBACK_SECONDS), $action), $result);
+            return self::prompt_observation($action, $this->candidates($list, $action), $result);
         } catch (AuthorizeNetException $e) {
             return $this->api_unavailable($e);
         } catch (\RuntimeException $e) {
@@ -382,8 +388,20 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
         return $this->completed($action, $claim);
     }
 
+    private static function fits(array $item, array $action): bool
+    {
+        $currency = (string) $action['currency'];
+        $trans_id = isset($item['transId']) && is_scalar($item['transId']) ? (string) $item['transId'] : '';
+        $submitted = TransactionVerifier::parse_utc(isset($item['submitTimeUTC']) && is_string($item['submitTimeUTC']) ? $item['submitTimeUTC'] : '');
+
+        return ($item['transactionStatus'] ?? '') === 'capturedPendingSettlement'
+            && preg_match('/^\d{1,20}$/', $trans_id) === 1
+            && TransactionVerifier::settle_minor($item['settleAmount'] ?? null, $currency) >= Money_Units::minor((string) $action['amount'], $currency)
+            && $submitted !== null && $submitted >= (int) $action['created_at'] - self::LOOKBACK_SECONDS;
+    }
+
     /**
-     * Candidate transactions for a leg, newest first: captured, same amount, recent enough, not another
+     * Candidate transactions for a leg, newest first: captured, at least the sale amount, recent enough, not another
      * row's. "ours" marks one this row has already claimed.
      *
      * @param array<int, array<string, mixed>> $list The unsettled list.
@@ -394,21 +412,16 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
     {
         $currency = (string) $action['currency'];
         $row_minor = Money_Units::minor((string) $action['amount'], $currency);
-        $floor = (int) $action['created_at'] - self::LOOKBACK_SECONDS;
         $candidates = array();
 
         foreach ($list as $item) {
             $trans_id = isset($item['transId']) && is_scalar($item['transId']) ? (string) $item['transId'] : '';
-            if (($item['transactionStatus'] ?? '') !== 'capturedPendingSettlement' || preg_match('/^\d{1,20}$/', $trans_id) !== 1) {
-                continue;
-            }
-            if (TransactionVerifier::settle_minor($item['settleAmount'] ?? null, $currency) !== $row_minor) {
+            if (!self::fits($item, $action)) {
                 continue;
             }
             $submitted = TransactionVerifier::parse_utc(isset($item['submitTimeUTC']) && is_string($item['submitTimeUTC']) ? $item['submitTimeUTC'] : '');
-            if ($submitted === null || $submitted < $floor) {
-                continue;
-            }
+            $settled = TransactionVerifier::settle_minor($item['settleAmount'] ?? null, $currency);
+            $tip = $settled > $row_minor;
             if (!$this->claims->available_to((string) $action['mode'], $trans_id, (string) $action['row_id'])) {
                 continue;
             }
@@ -418,13 +431,14 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
                 'trans_id' => $trans_id,
                 'submitted' => $submitted,
                 'ours' => $holder !== null,
+                'tip' => $tip,
                 'label' => sprintf(
                     '%s ••%s · %s · #%s',
                     $card,
                     TransactionVerifier::last4(isset($item['accountNumber']) && is_string($item['accountNumber']) ? $item['accountNumber'] : ''),
                     wp_date('H:i:s', $submitted),
                     $trans_id
-                ),
+                ) . ($tip ? ' · ' . $currency . ' ' . Money_Units::major($settled, $currency) : ''),
             );
         }
 
@@ -578,7 +592,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
 
         return array(
             'status' => 'completed',
-            'amount' => (string) $action['amount'],
+            'amount' => (string) ($claim['amount'] ?? $action['amount']),
             'currency' => (string) $action['currency'],
             'provider_refs' => array(
                 'transaction_id' => (string) $claim['trans_id'],

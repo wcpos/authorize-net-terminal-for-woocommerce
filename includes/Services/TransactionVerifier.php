@@ -6,6 +6,7 @@ use WCPOS\WooCommercePOSPro\Payments\Server\Money_Units;
 
 /**
  * Decides whether an Authorize.net transaction is money taken for this leg. Every doubt refuses.
+ * A captured amount above the sale is accepted as a tip.
  */
 class TransactionVerifier
 {
@@ -37,7 +38,7 @@ class TransactionVerifier
             return self::refuse('currency_mismatch', 'The Authorize.net account does not take payments in ' . $currency . '.');
         }
         $settled = self::settle_minor($details['settleAmount'] ?? null, $currency);
-        if ($settled === null || $settled <= 0 || $settled !== Money_Units::minor($amount, $currency)) {
+        if ($settled === null || $settled <= 0 || $settled < Money_Units::minor($amount, $currency)) {
             return self::refuse('amount_mismatch', 'That Authorize.net payment is not for ' . $currency . ' ' . $amount . '.');
         }
         $submitted = self::parse_utc(self::scalar($details, 'submitTimeUTC'));
@@ -53,7 +54,7 @@ class TransactionVerifier
         return array(
             'ok' => true,
             'trans_id' => self::scalar($details, 'transId'),
-            'amount' => $amount,
+            'amount' => Money_Units::major($settled, $currency),
             'currency' => $currency,
             'card_type' => self::scalar($card, 'cardType'),
             'last4' => self::last4(self::scalar($card, 'cardNumber')),
