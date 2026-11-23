@@ -51,7 +51,9 @@ antwc_assert_same('warning', end($GLOBALS['antwc_test_log'])['level'] ?? 'none',
 $ref = antwc_fetch_setup();
 antwc_test_tap('4001', 12.34, $now + 5, array('settleAmount' => 12.35));
 $result = $provider->fetch($ref);
-antwc_assert_same(array('completed', '12.35', 'USD', true), array($result['status'], $result['amount'], $result['currency'], !empty($GLOBALS['wpdb']->rows)), 'provider-mismatch: a tip in the details is claimed');
+antwc_assert_same(array('in_progress', 'Authorize.net shows USD 12.35 for that payment. Pick it to accept that amount.', array('txn:4001'), array()), array($result['status'], $result['prompt']['lines'][0], array_column($result['prompt']['buttons'], 'id'), $GLOBALS['wpdb']->rows), 'provider-mismatch: a larger amount in the details is not auto-matched');
+$result = $provider->answer($ref, $result['prompt']['id'], 'txn:4001');
+antwc_assert_same(array('completed', '12.35', 'USD', true), array($result['status'], $result['amount'], $result['currency'], !empty($GLOBALS['wpdb']->rows)), 'provider-mismatch: picking it accepts the details amount');
 
 $ref = antwc_fetch_setup();
 Antwc_Fake_Http::$currencies = array('EUR', 'GBP');
@@ -119,3 +121,10 @@ antwc_test_tap('4002', 15.0, $now + 9);
 antwc_test_tap('4001', 12.34, $now + 5);
 $result = $provider->fetch('antwc:row-a');
 antwc_assert_same(array('in_progress', array('txn:4001', 'txn:4002')), array($result['status'], array_column($result['prompt']['buttons'], 'id')), 'provider-tip: T5 exact amounts are offered before newer tipped payments');
+
+antwc_test_reset();
+$ref = $provider->create_reader_action(antwc_test_row('row-a', '0.00'), 'authorize-net-app')['ref'];
+antwc_test_tap('4001', 0.0, $now + 5);
+unset(Antwc_Fake_Http::$unsettled[0]['settleAmount']);
+$result = $provider->fetch($ref);
+antwc_assert_same(array('in_progress', array(), array()), array($result['status'], $result['prompt']['buttons'], $GLOBALS['wpdb']->rows), 'provider-mismatch: a null listed amount does not fit a zero sale');

@@ -109,6 +109,11 @@ $result = $provider->fetch($ref);
 antwc_assert_same(array('antwc_cancel_undecided', false), array(antwc_test_code($result), $store->get('row-a')['cancelled']), 'provider-cancel: requested + one fresh in_future -> indeterminate, not cancelled');
 
 $ref = antwc_cancel_setup();
+antwc_test_tap('4001', 12.34, $now + 5, array('settleAmount' => 12.35));
+$result = $provider->fetch($ref);
+antwc_assert_same(array('antwc_cancel_undecided', false, array()), array(antwc_test_code($result), $store->get('row-a')['cancelled'], $GLOBALS['wpdb']->rows), 'provider-cancel: requested + larger details amount -> undecided, no claim');
+
+$ref = antwc_cancel_setup();
 antwc_test_tap('4001', 12.34, $now + 5, array('transactionStatus' => 'voided'));
 $result = $provider->fetch($ref);
 antwc_assert_same(array('cancelled', true), array($result['status'], $store->get('row-a')['cancelled']), 'provider-cancel: requested + one fresh not_captured -> cancelled');

@@ -95,3 +95,9 @@ antwc_answer_setup();
 antwc_test_tap('4001', 12.0, $now + 5);
 $result = $provider->answer('antwc:row-a', 'p', 'txn:4001');
 antwc_assert_same(array('in_progress', 'That payment is not one of the payments listed for this sale.', array()), array($result['status'], $result['prompt']['lines'][0], $GLOBALS['wpdb']->rows), 'provider-answer: A2 an underpayment pick is refused without a claim');
+
+antwc_answer_setup();
+antwc_test_tap('4001', 12.34, $now + 5);
+Antwc_Fake_Http::$details['4005'] = antwc_test_details('4005', 12.34, $now + 5);
+$result = $provider->answer('antwc:row-a', 'p', 'txn:4005');
+antwc_assert_same(array('in_progress', 'That payment is not one of the payments listed for this sale.', array()), array($result['status'], $result['prompt']['lines'][0], $GLOBALS['wpdb']->rows), 'provider-answer: A3 an unlisted pick is refused while another payment is listed');

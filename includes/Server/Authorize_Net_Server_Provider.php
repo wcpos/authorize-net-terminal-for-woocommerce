@@ -129,7 +129,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
                     return !$candidate['tip'] && $candidate['submitted'] >= (int) $action['created_at'] - self::AUTO_MATCH_SKEW_SECONDS;
                 }));
                 if (count($fresh) === 1) {
-                    $result = $this->verify_and_claim($client, $action, $fresh[0]['trans_id']);
+                    $result = $this->verify_and_claim($client, $action, $fresh[0]['trans_id'], true);
                     if (isset($result['status'])) {
                         return $result; // Completion wins over the cancel.
                     }
@@ -141,7 +141,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
             if ($requested && $ours_refused) {
                 return $this->indeterminate('antwc_claim_unverified', __('This payment was recorded by this sale but could not be verified with Authorize.net. Try again.', 'authorize-net-terminal-for-woocommerce'));
             }
-            if ($requested && $refusal !== null && in_array($refusal['reason'], array('not_found', 'in_future'), true)) {
+            if ($requested && $refusal !== null && in_array($refusal['reason'], array('not_found', 'in_future', 'amount_differs'), true)) {
                 return $this->indeterminate('antwc_cancel_undecided', __('Authorize.net lists a payment for this sale that could not be checked yet. Try again.', 'authorize-net-terminal-for-woocommerce'));
             }
             // A list cut at the page cap proves no absence: neither cancel nor decline on it.
@@ -327,7 +327,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
      * @param array<string, mixed> $action
      * @return array<string, mixed> A completed observation, or a refusal (ok false, reason, message).
      */
-    private function verify_and_claim(AuthorizeNetClient $client, array $action, string $trans_id): array
+    private function verify_and_claim(AuthorizeNetClient $client, array $action, string $trans_id, bool $exact = false): array
     {
         $details = $client->transaction_details($trans_id);
         if (count($details) > 0 && (string) ($details['transId'] ?? '') !== $trans_id) {
@@ -356,6 +356,10 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
                 'currency' => $observed[1],
                 'provider_refs' => array('transaction_id' => $trans_id, 'mode' => (string) $action['mode']),
             );
+        }
+
+        if ($exact && Money_Units::minor($verdict['amount'], $verdict['currency']) !== Money_Units::minor((string) $action['amount'], (string) $action['currency'])) {
+            return array('ok' => false, 'reason' => 'amount_differs', 'message' => sprintf(__('Authorize.net shows %1$s %2$s for that payment. Pick it to accept that amount.', 'authorize-net-terminal-for-woocommerce'), $verdict['currency'], $verdict['amount']));
         }
 
         $row_id = (string) $action['row_id'];
@@ -391,12 +395,13 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
     private static function fits(array $item, array $action): bool
     {
         $currency = (string) $action['currency'];
+        $settle = TransactionVerifier::settle_minor($item['settleAmount'] ?? null, $currency);
         $trans_id = isset($item['transId']) && is_scalar($item['transId']) ? (string) $item['transId'] : '';
         $submitted = TransactionVerifier::parse_utc(isset($item['submitTimeUTC']) && is_string($item['submitTimeUTC']) ? $item['submitTimeUTC'] : '');
 
         return ($item['transactionStatus'] ?? '') === 'capturedPendingSettlement'
             && preg_match('/^\d{1,20}$/', $trans_id) === 1
-            && TransactionVerifier::settle_minor($item['settleAmount'] ?? null, $currency) >= Money_Units::minor((string) $action['amount'], $currency)
+            && $settle !== null && $settle >= Money_Units::minor((string) $action['amount'], $currency)
             && $submitted !== null && $submitted >= (int) $action['created_at'] - self::LOOKBACK_SECONDS;
     }
 
