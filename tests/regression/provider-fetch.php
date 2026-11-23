@@ -99,7 +99,12 @@ antwc_assert_same(array('in_progress', array()), array($result['status'], $resul
 $ref = antwc_fetch_setup();
 antwc_test_tap('4001', 12.35, $now + 5);
 $result = $provider->fetch($ref);
-antwc_assert_same(array('in_progress', array()), array($result['status'], $result['prompt']['buttons']), 'provider-fetch: a different amount -> not offered');
+antwc_assert_same(array('in_progress', array('txn:4001'), array()), array($result['status'], array_column($result['prompt']['buttons'], 'id'), $GLOBALS['wpdb']->rows), 'provider-fetch: a larger amount is offered as a tip, not auto-matched');
+
+$ref = antwc_fetch_setup();
+antwc_test_tap('4001', 12.33, $now + 5);
+$result = $provider->fetch($ref);
+antwc_assert_same(array('in_progress', array()), array($result['status'], $result['prompt']['buttons']), 'provider-fetch: a smaller amount -> not offered');
 
 $ref = antwc_fetch_setup();
 Antwc_Fake_Http::$unsettled[] = array_merge(antwc_test_details('4001', 12.34, $now + 5), array('transactionStatus' => 'voided'));
