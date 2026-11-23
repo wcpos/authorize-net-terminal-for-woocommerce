@@ -133,7 +133,7 @@ antwc_assert_same(
 );
 antwc_assert_same(false, strpos(json_encode($diagnostics), 'test-key'), 'provider-refund: diagnostics never show the key');
 antwc_assert_same(
-    array('capabilities' => array('tips' => 'none', 'refunds' => array('via' => 'provider', 'partial' => true), 'void' => true), 'provider_data' => array('mode' => 'sandbox')),
+    array('capabilities' => array('tips' => 'on_reader', 'refunds' => array('via' => 'provider', 'partial' => true), 'void' => true), 'provider_data' => array('mode' => 'sandbox')),
     $provider->describe($gateway),
     'provider-refund: describe'
 );
