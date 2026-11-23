@@ -122,6 +122,15 @@ antwc_test_tap('4001', 12.34, $now + 5);
 $result = $provider->fetch('antwc:row-a');
 antwc_assert_same(array('in_progress', array('txn:4001', 'txn:4002')), array($result['status'], array_column($result['prompt']['buttons'], 'id')), 'provider-tip: T5 exact amounts are offered before newer tipped payments');
 
+antwc_test_reset(array('auto_match' => 'no'));
+antwc_test_provider()->create_reader_action(antwc_test_row('row-a', '12.34', 101), 'authorize-net-app');
+for ($i = 0; $i < 6; $i++) {
+    antwc_test_tap((string) (4001 + $i), 12.34, $now - 100 + $i);
+}
+antwc_test_tap('4007', 15.0, $now + 5);
+$result = $provider->fetch('antwc:row-a');
+antwc_assert_same(array('in_progress', 6, true), array($result['status'], count($result['prompt']['buttons']), in_array('txn:4007', array_column($result['prompt']['buttons'], 'id'), true)), 'provider-tip: T6 a tipped payment stays listed when exact amounts fill the list');
+
 antwc_test_reset();
 $ref = $provider->create_reader_action(antwc_test_row('row-a', '0.00'), 'authorize-net-app')['ref'];
 antwc_test_tap('4001', 0.0, $now + 5);

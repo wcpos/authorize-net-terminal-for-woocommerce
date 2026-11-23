@@ -31,6 +31,8 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
     public const AUTO_MATCH_SKEW_SECONDS = 30;
     /** Most buttons a pick-list shows. */
     public const MAX_CANDIDATES = 6;
+    /** Slots kept for tipped payments when exact amounts fill the list. */
+    private const TIP_SLOTS = 2;
     /** The unsettled list is shared for 3 s, so 2-second polls from several tills cost one API call. */
     private const LIST_CACHE_SECONDS = 3;
     /** Error code Authorize.net gives a transaction refused as a duplicate within the duplicate window. */
@@ -188,7 +190,10 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
             if (!array_filter($list, static function (array $item) use ($match, $action) {
                 return self::fits($item, $action) && (string) $item['transId'] === $match[1];
             })) {
-                return self::prompt_observation($action, $this->candidates($list, $action), array('ok' => false, 'reason' => 'not_listed', 'message' => __('That payment is not one of the payments listed for this sale.', 'authorize-net-terminal-for-woocommerce')));
+                $details = $client->transaction_details($match[1]);
+                if (($details['transactionStatus'] ?? '') !== 'settledSuccessfully') {
+                    return self::prompt_observation($action, $this->candidates($list, $action), array('ok' => false, 'reason' => 'not_listed', 'message' => __('That payment is not one of the payments listed for this sale.', 'authorize-net-terminal-for-woocommerce')));
+                }
             }
             $result = $this->verify_and_claim($client, $action, $match[1]);
             if (isset($result['status'])) {
@@ -406,8 +411,9 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
     }
 
     /**
-     * Candidate transactions for a leg, exact amounts first, then newest first: captured, at least the sale amount, recent enough, not another
-     * row's. "ours" marks one this row has already claimed.
+     * Candidate transactions for a leg: this row's own claim first, then exact amounts, then newest first; up to TIP_SLOTS
+     * places are kept for tipped payments. Captured, at least the sale amount, recent enough, not another row's.
+     * "ours" marks one this row has already claimed.
      *
      * @param array<int, array<string, mixed>> $list The unsettled list.
      * @param array<string, mixed> $action
@@ -448,10 +454,17 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
         }
 
         usort($candidates, static function (array $a, array $b) {
-            return $a['tip'] <=> $b['tip'] ?: $b['submitted'] <=> $a['submitted'] ?: strcmp($b['trans_id'], $a['trans_id']);
+            return $b['ours'] <=> $a['ours'] ?: $a['tip'] <=> $b['tip'] ?: $b['submitted'] <=> $a['submitted'] ?: strcmp($b['trans_id'], $a['trans_id']);
         });
 
-        return array_slice($candidates, 0, self::MAX_CANDIDATES);
+        $shown = array_slice($candidates, 0, self::MAX_CANDIDATES);
+        $shown_tipped = array_sum(array_column($shown, 'tip'));
+        $hidden_tipped = array_filter(array_slice($candidates, self::MAX_CANDIDATES), static function (array $candidate) {
+            return $candidate['tip'];
+        });
+        $slots = min(count($hidden_tipped), max(0, self::TIP_SLOTS - $shown_tipped));
+
+        return array_merge(array_slice($shown, 0, count($shown) - $slots), array_slice($hidden_tipped, 0, $slots));
     }
 
     /**
