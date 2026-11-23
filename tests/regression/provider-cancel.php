@@ -136,6 +136,24 @@ $result = $provider->fetch($ref);
 antwc_assert_same(array('completed', array()), array($result['status'], $GLOBALS['antwc_test_notes']), 'provider-cancel: requested + one exact payment -> completed, no order note');
 
 $ref = antwc_cancel_setup();
+$GLOBALS['antwc_test_order_ids'] = array(101);
+for ($i = 0; $i < 6; $i++) {
+    antwc_test_tap((string) (4001 + $i), 12.34, $now - 100 + $i);
+}
+antwc_test_tap('4007', 15.0, $now + 5);
+antwc_test_tap('4008', 15.0, $now + 6);
+antwc_test_tap('4009', 15.0, $now + 7);
+$result = $provider->fetch($ref);
+$notes = $GLOBALS['antwc_test_notes'][101];
+antwc_assert_same(array('cancelled', 3, true, true, true), array($result['status'], count($notes), strpos($notes[0][0], '#4009') !== false, strpos($notes[1][0], '#4008') !== false, strpos($notes[2][0], '#4007') !== false), 'provider-cancel: requested + more larger payments than the list shows -> a note for each');
+
+$ref = antwc_cancel_setup();
+$GLOBALS['antwc_test_order_ids'] = array(101);
+antwc_test_tap('4001', 15.0, $now - 120);
+$result = $provider->fetch($ref);
+antwc_assert_same(array('cancelled', array()), array($result['status'], $GLOBALS['antwc_test_notes']), 'provider-cancel: requested + an older larger payment -> no order note');
+
+$ref = antwc_cancel_setup();
 antwc_test_tap('4001', 12.34, $now + 5, array('transactionStatus' => 'voided'));
 $result = $provider->fetch($ref);
 antwc_assert_same(array('cancelled', true), array($result['status'], $store->get('row-a')['cancelled']), 'provider-cancel: requested + one fresh not_captured -> cancelled');

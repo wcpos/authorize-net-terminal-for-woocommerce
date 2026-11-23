@@ -152,7 +152,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
             }
             if ($requested) {
                 $larger = array();
-                foreach ($candidates as $candidate) {
+                foreach ($this->candidates($list, $action, true) as $candidate) {
                     if ($candidate['tip'] && $candidate['submitted'] >= (int) $action['created_at'] - self::AUTO_MATCH_SKEW_SECONDS) {
                         $larger[$candidate['trans_id']] = $candidate['amount'];
                     }
@@ -208,7 +208,7 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
                 return self::fits($item, $action) && (string) $item['transId'] === $match[1];
             })) {
                 $details = $client->transaction_details($match[1]);
-                if (($details['transactionStatus'] ?? '') !== 'settledSuccessfully') {
+                if (!self::fits($details, $action, 'settledSuccessfully')) {
                     return self::prompt_observation($action, $this->candidates($list, $action), array('ok' => false, 'reason' => 'not_listed', 'message' => __('That payment is not one of the payments listed for this sale.', 'authorize-net-terminal-for-woocommerce')));
                 }
             }
@@ -414,14 +414,14 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
         return $this->completed($action, $claim);
     }
 
-    private static function fits(array $item, array $action): bool
+    private static function fits(array $item, array $action, string $status = 'capturedPendingSettlement'): bool
     {
         $currency = (string) $action['currency'];
         $settle = TransactionVerifier::settle_minor($item['settleAmount'] ?? null, $currency);
         $trans_id = isset($item['transId']) && is_scalar($item['transId']) ? (string) $item['transId'] : '';
         $submitted = TransactionVerifier::parse_utc(isset($item['submitTimeUTC']) && is_string($item['submitTimeUTC']) ? $item['submitTimeUTC'] : '');
 
-        return ($item['transactionStatus'] ?? '') === 'capturedPendingSettlement'
+        return ($item['transactionStatus'] ?? '') === $status
             && preg_match('/^\d{1,20}$/', $trans_id) === 1
             && $settle !== null && $settle >= Money_Units::minor((string) $action['amount'], $currency)
             && $submitted !== null && $submitted >= (int) $action['created_at'] - self::LOOKBACK_SECONDS;
@@ -430,13 +430,14 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
     /**
      * Candidate transactions for a leg: this row's own claim first, then exact amounts, then newest first; up to TIP_SLOTS
      * places are kept for tipped payments. Captured, at least the sale amount, recent enough, not another row's.
+     * With $all, every candidate in that order; otherwise at most MAX_CANDIDATES, keeping up to TIP_SLOTS places for tipped payments.
      * "ours" marks one this row has already claimed.
      *
      * @param array<int, array<string, mixed>> $list The unsettled list.
      * @param array<string, mixed> $action
      * @return array<int, array<string, mixed>>
      */
-    private function candidates(array $list, array $action): array
+    private function candidates(array $list, array $action, bool $all = false): array
     {
         $currency = (string) $action['currency'];
         $row_minor = Money_Units::minor((string) $action['amount'], $currency);
@@ -475,14 +476,14 @@ class Authorize_Net_Server_Provider extends Abstract_Provider_Adapter
             return $b['ours'] <=> $a['ours'] ?: $a['tip'] <=> $b['tip'] ?: $b['submitted'] <=> $a['submitted'] ?: strcmp($b['trans_id'], $a['trans_id']);
         });
 
-        $shown = array_slice($candidates, 0, self::MAX_CANDIDATES);
-        $shown_tipped = array_sum(array_column($shown, 'tip'));
-        $hidden_tipped = array_filter(array_slice($candidates, self::MAX_CANDIDATES), static function (array $candidate) {
-            return $candidate['tip'];
+        if ($all) { return $candidates; }
+        $tipped = array_filter($candidates, static function (array $candidate) {
+            return $candidate['tip'] && !$candidate['ours'];
         });
-        $slots = min(count($hidden_tipped), max(0, self::TIP_SLOTS - $shown_tipped));
+        $others = array_diff_key($candidates, $tipped);
+        $tip_count = min(count($tipped), max(self::TIP_SLOTS, self::MAX_CANDIDATES - count($others)));
 
-        return array_merge(array_slice($shown, 0, count($shown) - $slots), array_slice($hidden_tipped, 0, $slots));
+        return array_merge(array_slice($others, 0, self::MAX_CANDIDATES - $tip_count), array_slice($tipped, 0, $tip_count));
     }
 
     /**
