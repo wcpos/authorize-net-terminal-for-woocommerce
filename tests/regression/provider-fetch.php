@@ -40,6 +40,21 @@ antwc_assert_same(array('12.34', 'USD'), array($result['amount'], $result['curre
 antwc_assert_same(array('card_label' => 'Visa', 'card_last4' => '1111', 'auth_code' => 'ABC123', 'read_method' => 'authorize_net_app'), $result['receipt'], 'provider-fetch: receipt');
 antwc_assert_same(true, isset($GLOBALS['wpdb']->rows['antwc_claim_sandbox_4001']), 'provider-fetch: auto-match claimed the transaction');
 
+$ref = antwc_fetch_setup();
+for ($i = 55; $i >= 1; $i--) {
+    antwc_test_tap((string) (5000 + $i), 99.00, $now + $i + 5);
+}
+antwc_test_tap('4001', 12.34, $now + 5);
+$result = $provider->fetch($ref);
+antwc_assert_same(array('completed', '4001'), array($result['status'], $result['provider_refs']['transaction_id']), 'provider-fetch: a tap below 50 newer transactions still matches');
+
+$ref = antwc_fetch_setup();
+$older = antwc_test_provider($now - 1000)->create_reader_action(antwc_test_row('row-b'), 'authorize-net-app');
+$provider->fetch($ref);
+antwc_assert_same(1, Antwc_Fake_Http::count('getUnsettledTransactionListRequest'), 'provider-fetch: recent leg caches one list read');
+$provider->fetch($older['ref']);
+antwc_assert_same(2, Antwc_Fake_Http::count('getUnsettledTransactionListRequest'), 'provider-fetch: an older leg refetches past a newer cached list');
+
 $ref = antwc_fetch_setup(array('auto_match' => 'no'));
 antwc_test_tap('4001', 12.34, $now + 5);
 $result = $provider->fetch($ref);
@@ -84,7 +99,12 @@ antwc_assert_same(array('in_progress', array()), array($result['status'], $resul
 $ref = antwc_fetch_setup();
 antwc_test_tap('4001', 12.35, $now + 5);
 $result = $provider->fetch($ref);
-antwc_assert_same(array('in_progress', array()), array($result['status'], $result['prompt']['buttons']), 'provider-fetch: a different amount -> not offered');
+antwc_assert_same(array('in_progress', array('txn:4001'), array()), array($result['status'], array_column($result['prompt']['buttons'], 'id'), $GLOBALS['wpdb']->rows), 'provider-fetch: a larger amount is offered as a tip, not auto-matched');
+
+$ref = antwc_fetch_setup();
+antwc_test_tap('4001', 12.33, $now + 5);
+$result = $provider->fetch($ref);
+antwc_assert_same(array('in_progress', array()), array($result['status'], $result['prompt']['buttons']), 'provider-fetch: a smaller amount -> not offered');
 
 $ref = antwc_fetch_setup();
 Antwc_Fake_Http::$unsettled[] = array_merge(antwc_test_details('4001', 12.34, $now + 5), array('transactionStatus' => 'voided'));
@@ -142,3 +162,44 @@ antwc_test_tap('4001', 12.34, $now - 120);
 $GLOBALS['wpdb']->rows['antwc_claim_sandbox_4001'] = json_encode(array('row_id' => 'row-a', 'order_id' => 101, 'claimed_at' => $now));
 $result = $provider->fetch($ref);
 antwc_assert_same(array('completed', '4001'), array($result['status'], $result['provider_refs']['transaction_id']), 'provider-fetch: our own unstored claim is recovered');
+
+// An unsettled list cut at the page cap proves no absence.
+/** 1001 USD 99.00 taps inside the lookback: 20 full pages, the last still newer than the floor. */
+function antwc_fetch_crowd(): void
+{
+    for ($i = 1; $i <= 1001; $i++) {
+        antwc_test_tap((string) (6000 + $i), 99.00, ANTWC_TEST_NOW - intdiv($i, 2));
+    }
+}
+
+$ref = antwc_fetch_setup();
+$provider->cancel($ref);
+antwc_fetch_crowd();
+$result = $provider->fetch($ref);
+antwc_assert_same(
+    array('antwc_list_incomplete', true, false),
+    array(antwc_test_code($result), $result instanceof WP_Error ? $result->get_error_data()['indeterminate'] : null, (new \WCPOS\WooCommercePOS\AuthorizeNetTerminal\Server\Action_Store())->get('row-a')['cancelled']),
+    'provider-fetch: cancel requested + incomplete list, no tap -> indeterminate, not cancelled'
+);
+
+$ref = antwc_fetch_setup();
+Antwc_Fake_Http::$unsettled[] = array_merge(antwc_test_details('4001', 12.34, $now + 5), array('transactionStatus' => 'declined', 'responseCode' => 2));
+antwc_fetch_crowd();
+$result = $provider->fetch($ref);
+antwc_assert_same(array('in_progress', null), array($result['status'], $result['failure_reason'] ?? null), 'provider-fetch: incomplete list + a newer decline -> not failed as declined');
+
+$ref = antwc_fetch_setup();
+$provider->fetch($ref);
+foreach (array_keys($GLOBALS['antwc_test_transients']) as $key) {
+    if (strpos($key, 'antwc_unsettled_') === 0) {
+        unset($GLOBALS['antwc_test_transients'][$key]['complete']);
+    }
+}
+$provider->fetch($ref);
+antwc_assert_same(2, Antwc_Fake_Http::count('getUnsettledTransactionListRequest'), 'provider-fetch: a cached list without complete is refetched');
+
+$ref = antwc_fetch_setup();
+$older = antwc_test_provider($now - 1000)->create_reader_action(antwc_test_row('row-b'), 'authorize-net-app');
+$provider->fetch($older['ref']);
+$provider->fetch($ref);
+antwc_assert_same(1, Antwc_Fake_Http::count('getUnsettledTransactionListRequest'), 'provider-fetch: a newer leg reuses a complete list cached from an older floor');

@@ -166,6 +166,24 @@ namespace
         public $settings = array();
     }
 
+    final class Antwc_Test_Order
+    {
+        /** @var int */
+        private $id;
+
+        public function __construct(int $id)
+        {
+            $this->id = $id;
+        }
+
+        public function add_order_note($note, $is_customer_note = 0)
+        {
+            $GLOBALS['antwc_test_notes'][$this->id][] = array($note, $is_customer_note);
+
+            return 1;
+        }
+    }
+
     final class Antwc_Test_Logger
     {
         public function info($message, $context = array()): void
@@ -271,6 +289,11 @@ namespace
         return array_slice($ids, 0, (int) ($args['limit'] ?? 10));
     }
 
+    function wc_get_order($id)
+    {
+        return in_array((int) $id, $GLOBALS['antwc_test_order_ids'], true) ? new Antwc_Test_Order((int) $id) : false;
+    }
+
     function wc_get_logger()
     {
         return new Antwc_Test_Logger();
@@ -369,6 +392,8 @@ namespace
         $GLOBALS['antwc_test_transients'] = array();
         $GLOBALS['antwc_test_log'] = array();
         $GLOBALS['antwc_test_orders'] = array();
+        $GLOBALS['antwc_test_order_ids'] = array();
+        $GLOBALS['antwc_test_notes'] = array();
         $GLOBALS['wpdb'] = new Antwc_Fake_Wpdb();
         Antwc_Fake_Http::reset();
     }

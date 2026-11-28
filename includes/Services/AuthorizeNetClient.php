@@ -18,6 +18,10 @@ class AuthorizeNetClient
     private const REF_ID_MAX = 20;
     /** The maximum duplicate window Authorize.net accepts (8 hours): a replayed identical refund is refused with error 11. */
     private const REFUND_DUPLICATE_WINDOW = '28800';
+    /** Transactions requested per unsettled-list page. */
+    private const LIST_PAGE_SIZE = 50;
+    /** At most 1000 transactions, 20 calls, per read. */
+    private const LIST_MAX_PAGES = 20;
 
     /** @var string */
     private $endpoint;
@@ -44,19 +48,51 @@ class AuthorizeNetClient
     /**
      * Unsettled transactions, newest first.
      *
+     * @param bool|null $complete Set false when the page cap cut the list before it reached $not_before.
      * @return array<int, array<string, mixed>>
      */
-    public function unsettled_transactions(int $limit = 50): array
+    public function unsettled_transactions(int $not_before, ?bool &$complete = null): array
     {
-        $response = $this->call('getUnsettledTransactionListRequest', array(
-            'sorting' => array('orderBy' => 'submitTimeUTC', 'orderDescending' => true),
-            'paging' => array('limit' => (string) $limit, 'offset' => '1'),
-        ));
-        if (self::message_code($response) === 'I00004') {
-            return array(); // "No records found."
+        $complete = true;
+        $list = array();
+        $seen = array();
+        for ($page = 1; $page <= self::LIST_MAX_PAGES; $page++) {
+            $response = $this->call('getUnsettledTransactionListRequest', array(
+                'sorting' => array('orderBy' => 'submitTimeUTC', 'orderDescending' => true),
+                'paging' => array('limit' => (string) self::LIST_PAGE_SIZE, 'offset' => (string) $page),
+            ));
+            if (self::message_code($response) === 'I00004') {
+                break; // "No records found."
+            }
+            $items = array_values(array_filter(self::as_list($response['transactions'] ?? array()), 'is_array'));
+            foreach ($items as $item) {
+                if (isset($item['transId']) && is_scalar($item['transId'])) {
+                    $id = (string) $item['transId'];
+                    if (isset($seen[$id])) {
+                        continue;
+                    }
+                    $seen[$id] = true;
+                }
+                $list[] = $item;
+            }
+            if (count($items) < self::LIST_PAGE_SIZE) {
+                break;
+            }
+            // The page's last readable time; an unreadable one keeps paging, bounded by the cap.
+            $submitted = null;
+            for ($i = count($items) - 1; $i >= 0 && $submitted === null; $i--) {
+                $last = $items[$i]['submitTimeUTC'] ?? '';
+                $submitted = TransactionVerifier::parse_utc(is_string($last) ? $last : '');
+            }
+            if ($submitted !== null && $submitted < $not_before) {
+                break;
+            }
+            if ($page === self::LIST_MAX_PAGES) {
+                $complete = false;
+            }
         }
 
-        return array_values(array_filter(self::as_list($response['transactions'] ?? array()), 'is_array'));
+        return $list;
     }
 
     /**

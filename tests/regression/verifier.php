@@ -23,7 +23,7 @@ antwc_assert_same(
 );
 
 // Each case also breaks every later check, so the code proves the order.
-$late = array('submitTimeUTC' => 'garbage', 'settleAmount' => 99.0);
+$late = array('submitTimeUTC' => 'garbage', 'settleAmount' => 1.0);
 $cases = array(
     'not_found' => array(array(), array('USD')),
     'wrong_type' => array(array_merge($good, $late, array('transactionType' => 'refundTransaction', 'transactionStatus' => 'declined')), array()),
@@ -45,3 +45,9 @@ antwc_assert_same('ok', antwc_reason($verifier->verify(array_merge($good, array(
 antwc_assert_same('amount_mismatch', antwc_reason($verifier->verify(array_merge($good, array('settleAmount' => 1500)), '1501', 'JPY', array('JPY'), $now - 900, $now)), 'verifier: 0-dp JPY 1500 vs 1501 refused');
 antwc_assert_same('amount_mismatch', antwc_reason($verifier->verify(array_merge($good, array('settleAmount' => 0)), '0.00', 'USD', array('USD'), $now - 900, $now)), 'verifier: zero amount refused');
 antwc_assert_same($now - 60, TransactionVerifier::parse_utc(gmdate('Y-m-d\TH:i:s', $now - 60)), 'verifier: suffix-less submitTimeUTC read as UTC');
+
+$tip = $verifier->verify(array_merge($good, array('settleAmount' => 15.0)), '12.34', 'USD', array('USD'), $now - 900, $now);
+antwc_assert_same(array(true, '15.00'), array($tip['ok'], $tip['amount']), 'verifier: a USD tip is accepted with the captured amount');
+$tip = $verifier->verify(array_merge($good, array('settleAmount' => 1600)), '1500', 'JPY', array('JPY'), $now - 900, $now);
+antwc_assert_same(array(true, '1600'), array($tip['ok'], $tip['amount']), 'verifier: a JPY tip is accepted with the captured amount');
+antwc_assert_same('amount_mismatch', antwc_reason($verifier->verify(array_merge($good, array('settleAmount' => 12.33)), '12.34', 'USD', array('USD'), $now - 900, $now)), 'verifier: 12.33 below 12.34 is refused');
